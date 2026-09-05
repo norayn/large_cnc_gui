@@ -140,7 +140,12 @@ class CNCConnectionWorker(QThread):
             except (AttributeError, ValueError) as e:
                 # Если пакет по дороге побился, выводим ошибку парсинга в лог
                 self.log_received.emit(f"Ошибка парсинга пакета: {e} | Строка: {line}")
-                
+
+        elif line.startswith("CONFIG_DATA:"):
+            # Просто пробрасываем всю строку в общий лог, 
+            # а главный диспетчер main.py передаст её в модель состояния
+            self.log_received.emit(line)
+            
         # Поток данных сканирования: SCAN:X_val;Z_val;TYPE
         elif line.startswith("SCAN:"):
             try:

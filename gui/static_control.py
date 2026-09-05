@@ -1,4 +1,5 @@
-from PyQt6.QtWidgets import QWidget, QHBoxLayout, QVBoxLayout, QLabel, QPushButton
+# gui/static_control.py
+from PyQt6.QtWidgets import QWidget, QHBoxLayout, QVBoxLayout, QLabel, QPushButton, QGridLayout
 
 class StaticControlWidget(QWidget):
     def __init__(self, parent=None):
@@ -10,20 +11,39 @@ class StaticControlWidget(QWidget):
         layout = QHBoxLayout(self)
         layout.setContentsMargins(6, 4, 6, 4)
         
-        # DRO Координаты
-        dro_layout = QVBoxLayout()
-        dro_layout.setSpacing(2)
-        self.lbl_x = QLabel("X: 0.000")
-        self.lbl_y = QLabel("Y: 0.000")
-        self.lbl_z = QLabel("Z: 0.000")
-        for lbl in [self.lbl_x, self.lbl_y, self.lbl_z]:
-            lbl.setStyleSheet("font-family: 'Consolas', monospace; font-size: 18px; color: #00ff00; font-weight: bold;")
-        dro_layout.addWidget(self.lbl_x)
-        dro_layout.addWidget(self.lbl_y)
-        dro_layout.addWidget(self.lbl_z)
-        layout.addLayout(dro_layout)
+        # Сетка для DRO: 3 строки (X, Y, Z), 2 колонки (Колонка 1 - WCS, Колонка 2 - MCS)
+        dro_grid = QGridLayout()
+        dro_grid.setSpacing(2)
+        dro_grid.setHorizontalSpacing(10) # Небольшой отступ между WCS и MCS
         
-        # Шпиндель / СОЖ
+        # Метки для Рабочих координат (Крупные, Зеленые)
+        self.lbl_x_wcs = QLabel("X: 0.000")
+        self.lbl_y_wcs = QLabel("Y: 0.000")
+        self.lbl_z_wcs = QLabel("Z: 0.000")
+        for lbl in [self.lbl_x_wcs, self.lbl_y_wcs, self.lbl_z_wcs]:
+            lbl.setStyleSheet("font-family: 'Consolas', monospace; font-size: 18px; color: #00ff00; font-weight: bold; background: transparent;")
+            
+        # Метки для Машинных координат (Поменьше, Серые, в скобках)
+        self.lbl_x_mcs = QLabel("[M: 0.000]")
+        self.lbl_y_mcs = QLabel("[M: 0.000]")
+        self.lbl_z_mcs = QLabel("[M: 0.000]")
+        for lbl in [self.lbl_x_mcs, self.lbl_y_mcs, self.lbl_z_mcs]:
+            lbl.setStyleSheet("font-family: 'Consolas', monospace; font-size: 11px; color: #888888; background: transparent; padding-top: 6px;") 
+            # padding-top сдвигает их чуть ниже, чтобы они красиво выравнивались по базовой линии крупных цифр
+            
+        # Раскладываем в сетку
+        dro_grid.addWidget(self.lbl_x_wcs, 0, 0)
+        dro_grid.addWidget(self.lbl_x_mcs, 0, 1)
+        
+        dro_grid.addWidget(self.lbl_y_wcs, 1, 0)
+        dro_grid.addWidget(self.lbl_y_mcs, 1, 1)
+        
+        dro_grid.addWidget(self.lbl_z_wcs, 2, 0)
+        dro_grid.addWidget(self.lbl_z_mcs, 2, 1)
+        
+        layout.addLayout(dro_grid)
+        
+        # Блок шпинделя и СОЖ (Остается без изменений)
         spindle_layout = QVBoxLayout()
         spindle_layout.setSpacing(3)
         lbl_title = QLabel("ШПИНДЕЛЬ / СОЖ")
@@ -39,8 +59,12 @@ class StaticControlWidget(QWidget):
         spindle_layout.addWidget(self.btn_coolant)
         layout.addLayout(spindle_layout)
 
-    def update_coordinates(self, x, y, z):
-        """Публичный метод (API) для обновления DRO из главного окна"""
-        self.lbl_x.setText(f"X: {x:.3f}")
-        self.lbl_y.setText(f"Y: {y:.3f}")
-        self.lbl_z.setText(f"Z: {z:.3f}")
+    def update_all_coordinates(self, w_x, w_y, w_z, m_x, m_y, m_z):
+        """Обновленный публичный метод API для одновременного вывода WCS и MCS"""
+        self.lbl_x_wcs.setText(f"X: {w_x:.3f}")
+        self.lbl_y_wcs.setText(f"Y: {w_y:.3f}")
+        self.lbl_z_wcs.setText(f"Z: {w_z:.3f}")
+        
+        self.lbl_x_mcs.setText(f"[M: {m_x:.3f}]")
+        self.lbl_y_mcs.setText(f"[M: {m_y:.3f}]")
+        self.lbl_z_mcs.setText(f"[M: {m_z:.3f}]")
