@@ -29,6 +29,8 @@ class CNCMachineState(QObject):
         
         self.config = {}
 
+        self.gcode_lines = []
+
     def update_telemetry(self, status, x, y, z, is_homed, current_line):
         has_changed = (self.status != status or 
                        self.x != x or self.y != y or self.z != z or 

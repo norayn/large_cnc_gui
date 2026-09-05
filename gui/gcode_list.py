@@ -1,3 +1,4 @@
+# gui/gcode_list.py
 from PyQt6.QtWidgets import QWidget, QVBoxLayout, QLabel, QListWidget
 
 class GCodeListWidget(QWidget):
@@ -14,16 +15,22 @@ class GCodeListWidget(QWidget):
         lbl_title.setStyleSheet("font-size: 10px; color: #666; font-weight: bold; font-family: sans-serif;")
         layout.addWidget(lbl_title)
         
-        # Вместо addStretch ставим полноценный виджет списка для Candle-стиля
         self.list_widget = QListWidget()
         self.list_widget.setStyleSheet("""
             QListWidget { background-color: #101010; color: #ccc; border: none; font-family: 'Consolas', monospace; font-size: 11px; }
-            QListWidget::item:selected { background-color: #004488; color: white; }
+            QListWidget::item:selected { background-color: #004488; color: white; font-weight: bold; }
         """)
-        # Тестовое наполнение для проверки расширенной ширины
-        self.list_widget.addItems([
-            "G90", "G21", "G0 Z5.000", "M3 S12000", 
-            "G1 X100.520 Y23.110 Z-1.000 F1200", 
-            "G1 X120.000 Y25.400"
-        ])
         layout.addWidget(self.list_widget)
+
+    def load_lines(self, lines_list):
+        """Метод полной перезагрузки списка строк на экране"""
+        self.list_widget.clear()
+        self.list_widget.addItems(lines_list)
+
+    def highlight_line(self, line_num):
+        """Слот подсветки текущего кадра (вызывается реактивно при смене кадра в телеметрии)"""
+        if 0 <= line_num < self.list_widget.count():
+            self.list_widget.setCurrentRow(line_num)
+            # Автоматический скроллинг ленты, чтобы текущий кадр всегда был по центру экрана ноутбука
+            item = self.list_widget.item(line_num)
+            self.list_widget.scrollToItem(item, QListWidget.ScrollHint.PositionAtCenter)

@@ -22,6 +22,13 @@ class CNCApplication:
         
         # Инициализируем модальное окно настроек и передаем ссылку на состояние
         self.settings_dialog = CNCSettingsDialog(state_obj=self.state, parent=self.window)
+
+        # СВЯЗЫВАНИЕ ПЕРЕМЕННЫХ И СОСТОЯНИЯ ДЛЯ ВКЛАДОК
+        self.window.control_tabs.tab_jog.set_state_reference(self.state)
+        self.window.control_tabs.tab_files.set_state_reference(self.state) # Передаем state во вкладку файлов
+        
+        # Подписываем ленту на экране на сигнал ручной генерации тест-квадрата
+        self.window.control_tabs.tab_files.gcode_loaded_notify.connect(self.handle_gcode_loaded_ui)
         
         self.window.control_tabs.tab_jog.set_state_reference(self.state)
         self.state.state_changed.connect(self.sync_gui_with_state)
@@ -117,6 +124,11 @@ class CNCApplication:
         # Обновляем состояние
         self.state.update_telemetry(status, x, y, z, is_homed, current_line)
 
+    def handle_gcode_loaded_ui(self):
+        """Слот: переносит сгенерированные строки из памяти состояния на экран ноутбука"""
+        self.window.gcode_zone.load_lines(self.state.gcode_lines)
+        self.window.lbl_log_preview.setText("ЛОГ: Сгенерирована тестовая программа обхода квадрата 200х200 мм.")
+
     def sync_gui_with_state(self):
         self.window.static_control.update_all_coordinates(
             self.state.x, self.state.y, self.state.z,
@@ -127,6 +139,8 @@ class CNCApplication:
         self.window.view_3d.update_tool_position(self.state.m_x, self.state.m_y, self.state.m_z)
 
         self.window.setWindowTitle(f"CNC Portal HMI [Статус: {self.state.status} | Кадр: {self.state.current_line}]")
+
+        self.window.gcode_zone.highlight_line(self.state.current_line)
         
         if self.state.is_homed:
             self.window.lbl_comp_status.setText(" MACHINE: HOMED ")
