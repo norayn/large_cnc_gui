@@ -161,7 +161,7 @@ class CNCConnectionWorker(QThread):
     # ==========================================
     @pyqtSlot(str)
     def send_command(self, cmd_str):
-        formatted_cmd = cmd_str.strip() + "\n"
+        formatted_cmd = cmd_str.strip() + "\r\n"
         encoded_cmd = formatted_cmd.encode('utf-8')
         
         try:

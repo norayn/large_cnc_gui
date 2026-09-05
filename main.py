@@ -1,77 +1,117 @@
 # main.py
 import sys
+import datetime
 from PyQt6.QtWidgets import QApplication
+
+# Импортируем модули
 from gui.main_window import CNCMainWindow
+from gui.dialog_log import CNCLogWindow # Новый импорт окна логов
 from connection_worker import CNCConnectionWorker
+from machine_state import CNCMachineState
 
 class CNCApplication:
     def __init__(self):
         self.app = QApplication(sys.argv)
-        self.window = CNCMainWindow()
+        self.log_file_path = "cnc_session.log"
+
         self.conn_worker = None
         
-        # Пример запуска соединения (в будущем параметры будут браться из окна "НАСТРОЙКИ")
-        # Вы можете вручную поменять mode="wifi" или mode="usb" для тестов
-        #self.start_connection(mode="wifi", ip="192.168.4.1", port=8888)
+        self.state = CNCMachineState()
+        self.window = CNCMainWindow()
+        
+        # Инициализируем окно терминала логов (неблокирующее)
+        self.log_window = CNCLogWindow(log_path=self.log_file_path, parent=self.window)
+        
+        self.window.control_tabs.tab_jog.set_state_reference(self.state)
+        self.state.state_changed.connect(self.sync_gui_with_state)
+        
+        # Привязка кнопки открытия терминала
+        self.window.btn_open_terminal.clicked.connect(self.log_window.show)
+        
         self.start_connection(mode="usb", com="COM4", baud=115200)
-
-        # Перехватываем событие закрытия главного окна, чтобы безопасно остановить потоки и порт
         self.window.closeEvent = self.on_window_close
 
-    def start_connection(self, mode="wifi", ip="192.168.4.1", port=8888, com="COM3", baud=115200):
-        # Если старый поток запущен — останавливаем его
+    def start_connection(self, mode="usb", ip="192.168.4.1", port=8888, com="COM4", baud=115200):
         if self.conn_worker and self.conn_worker.isRunning():
             self.conn_worker.stop()
             
-        # Создаем новый поток связи с нужными параметрами
         self.conn_worker = CNCConnectionWorker(
             mode=mode, wifi_ip=ip, wifi_port=port, serial_port=com, baudrate=baud
         )
         
-        # --- СВЯЗЫВАНИЕ СИГНАЛОВ (ПОТОК -> ИНТЕРФЕЙС) ---
-        # 1. Прием логов и ошибок
-        self.conn_worker.log_received.connect(
-            lambda msg: self.window.lbl_log_preview.setText(f"ЛОГ: {msg}")
-        )
-        # 2. Обновление статуса соединения
+        # Изменяем перехват лога: теперь он идет в метод файлового логирования
+        self.conn_worker.log_received.connect(self.handle_incoming_log)
         self.conn_worker.connection_status.connect(self.handle_connection_status)
         
-        # 3. Обновление координат (DRO) при получении телеметрии
-        self.conn_worker.telemetry_received.connect(self.handle_telemetry)
+        # Перехватываем телеметрию. Дополнительно пишем ее в файл (опционально, можно закомментировать для чистоты)
+        self.conn_worker.telemetry_received.connect(self.handle_telemetry_packet)
         
-        # Запускаем поток на выполнение
+        self.window.control_tabs.command_requested.connect(self.handle_gui_command_request)
+        self.window.txt_mdi.returnPressed.connect(self.handle_mdi_send)
+
         self.conn_worker.start()
 
-    def handle_connection_status(self, success, message):
-        self.window.lbl_log_preview.setText(f"ЛОГ: {message}")
-        if success:
-            self.window.status_bar.showMessage("Станок готов к работе", 5000)
-        else:
-            self.window.status_bar.showMessage("Ошибка связи!", 5000)
+    def write_to_log_file(self, direction, text):
+        """Потоковая запись строки на диск в режиме Append и проброс в открытое окно"""
+        timestamp = datetime.datetime.now().strftime("%H:%M:%S.%f")[:-3]
+        log_line = f"[{timestamp}] {direction} {text}"
+        
+        # Мгновенная запись на диск (без удержания файла в RAM)
+        try:
+            with open(self.log_file_path, "a", encoding="utf-8") as f:
+                f.write(log_line + "\n")
+        except Exception:
+            pass
+            
+        # Пробрасываем строчку в окно терминала логов (выведется, только если окно открыто)
+        self.log_window.append_log_line(log_line)
 
-    def handle_telemetry(self, status, x, y, z, is_homed, current_line):
-        # 1. Передаем координаты в наш изолированный GUI-модуль DRO
-        self.window.static_control.update_coordinates(x, y, z)
+    def handle_gui_command_request(self, cmd):
+        """Перехват команд от графических вкладок (JOG, кнопки)"""
+        if self.conn_worker:
+            self.write_to_log_file("[GUI -> ЧПУ]", cmd)
+            self.conn_worker.send_command(cmd)
+
+    def handle_mdi_send(self):
+        """Отправка команды из строки MDI"""
+        cmd = self.window.txt_mdi.text().strip()
+        if cmd and self.conn_worker:
+            self.write_to_log_file("[MDI -> ЧПУ]", cmd)
+            self.conn_worker.send_command(cmd)
+            self.window.txt_mdi.clear()
+
+    def handle_incoming_log(self, msg):
+        """Перехват текстовых сообщений (ok, error, echo) от ESP32"""
+        self.write_to_log_file("[ЧПУ -> GUI]", msg)
+        self.window.lbl_log_preview.setStyleSheet("font-size: 11px; color: #00ff00;")
+        self.window.lbl_log_preview.setText(f"ОТВЕТ СТАНКА: {msg}")
+
+    def handle_telemetry_packet(self, status, x, y, z, is_homed, current_line):
+        """Прослойка для логирования сырой телеметрии и пуша ее в CNCState"""
+        # Логируем пакет телеметрии в файл для истории отладки
+        raw_packet_str = f"<Status:{status}|Pos:X={x},Y={y},Z={z}|Hom:{int(is_homed)}|Line={current_line}>"
+        self.write_to_log_file("[ЧПУ TELEM]", raw_packet_str)
         
-        # 2. Динамически меняем заголовок окна ноутбука, показывая статус и текущий кадр G-кода
-        self.window.setWindowTitle(f"CNC Portal Upper Control HMI [Статус: {status} | Кадр: {current_line}]")
+        # Обновляем состояние
+        self.state.update_telemetry(status, x, y, z, is_homed, current_line)
+
+    def sync_gui_with_state(self):
+        self.window.static_control.update_coordinates(self.state.x, self.state.y, self.state.z)
+        self.window.setWindowTitle(f"CNC Portal HMI [Статус: {self.state.status} | Кадр: {self.state.current_line}]")
         
-        # 3. Управляем сквозным индикатором привязки к дому (Hom) вместо компенсаций
-        if is_homed:
+        if self.state.is_homed:
             self.window.lbl_comp_status.setText(" MACHINE: HOMED ")
             self.window.lbl_comp_status.setStyleSheet("background-color: #00ff00; color: #000; font-weight: bold; font-size: 10px; margin-right: 4px;")
         else:
             self.window.lbl_comp_status.setText(" MACHINE: NOT HOMED ")
             self.window.lbl_comp_status.setStyleSheet("background-color: #aa0000; color: #fff; font-weight: bold; font-size: 10px; margin-right: 4px;")
-            
-        # Если статус станка ALARM — подсветим лог превью тревожным цветом
-        if status == "ALARM":
-            self.window.lbl_log_preview.setStyleSheet("font-size: 11px; color: #ff3333; font-weight: bold;")
-            self.window.lbl_log_preview.setText("ЛОГ: Внимание! Сработал режим тревоги (ALARM). Требуется сброс.")
 
+    def handle_connection_status(self, success, message):
+        self.write_to_log_file("[SYSTEM]", message)
+        self.window.lbl_log_preview.setStyleSheet("font-size: 11px; color: #aaa;")
+        self.window.lbl_log_preview.setText(f"ЛОГ СВЯЗИ: {message}")
 
     def on_window_close(self, event):
-        # Метод сработает при закрытии крестиком ноутбука. Закрываем порты чисто.
         if self.conn_worker:
             self.conn_worker.stop()
         event.accept()

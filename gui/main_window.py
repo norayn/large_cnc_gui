@@ -53,12 +53,12 @@ class CNCMainWindow(QMainWindow):
         main_layout.addLayout(center_panel, stretch=4)
         
         # ==========================================================
-        # 3. НИЖНЯЯ ПАНЕЛЬ И СТАТУС-БАР
+        # 3. НИЖНЯЯ ПАНЕЛЬ И СТАТУС-БАР (С кнопкой ТЕРМИНАЛ)
         # ==========================================================
         bottom_panel = QHBoxLayout()
         bottom_panel.setSpacing(4)
         
-        self.lbl_log_preview = QLabel("ЛОГ: Пропорции рабочей зоны скорректированы (Лента G-кода сужена).")
+        self.lbl_log_preview = QLabel("ЛОГ: Система инициализирована. Потоковое логирование активно.")
         self.lbl_log_preview.setStyleSheet("font-size: 11px; color: #aaa;")
         bottom_panel.addWidget(self.lbl_log_preview, stretch=3)
         
@@ -66,6 +66,10 @@ class CNCMainWindow(QMainWindow):
         self.txt_mdi = QLineEdit()
         self.txt_mdi.setStyleSheet("background-color: #000; color: #fff; font-family: monospace; border: 1px solid #555; font-size: 11px; max-height: 20px;")
         bottom_panel.addWidget(self.txt_mdi, stretch=2)
+        
+        self.btn_open_terminal = QPushButton("ТЕРМИНАЛ")
+        self.btn_open_terminal.setStyleSheet("background-color: #1a3a1a; color: #00ff00; font-size: 10px; font-weight: bold; max-height: 20px; padding: 2px 8px; border: 1px solid #005500;")
+        bottom_panel.addWidget(self.btn_open_terminal, stretch=0)
         
         self.btn_settings = QPushButton("НАСТРОЙКИ")
         self.btn_settings.setStyleSheet("background-color: #555; font-size: 10px; font-weight: bold; max-height: 20px; padding: 2px 10px;")
