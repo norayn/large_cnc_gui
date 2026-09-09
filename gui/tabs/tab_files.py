@@ -57,78 +57,82 @@ class TabFilesWidget(QWidget):
         layout.addLayout(cycle_btns)
 
     def _generate_test_square(self):
-        """Тестовый квадрат 200х200 мм (спущен в "модальный" стиль G-кода)"""
+        """
+        Инженерный полигон для тестированияLook-Ahead и Junction Deviation.
+        Программа на 16 кадров с поворотами под углами 15, 45, 60, 90 и 120 градусов.
+        """
         if not self.machine_state: return
         
-        # Намеренно убираем повторяющиеся координаты Y, Z и подачу F из кадров 5, 6, 7, 
-        # чтобы проверить работу автозаполнения осей в GUI
+        # Генерируем массив траектории (все линейные перемещения G1 идут на подаче F1500)
         self.machine_state.gcode_lines = [
-            #"G90 G21",
-            "G0 Z5.000 F1500",
-            "G0 X0.000 Y0.000",
-            "G1 Z-2.000 F300",
-            "G1 X200.000 Y0.000 F1200", # Тут заданы полные оси и подача 1200
-            "G1 X200.000 Y200.000",     # Пропущена ось Z и скорость F (модальные)
-            "G1 X0.000",                 # Пропущены Y, Z и F
-            "G1 Y0.000",                 # Пропущены X, Z и F
-            "G0 Z5.000",                # Выход фрезы вверх (пропущены X, Y, F)
-            "G0 X0.000 Y0.000"          # Возврат в ноль
+            "G90 G21",                      # Кадр 0: Инициализация (Абсолют, мм)
+            "G0 Z5.000 F2000",              # Кадр 1: Безопасный подъем Z вверх
+            "G0 X0.000 Y0.000",             # Кадр 2: Выход в локальный рабочий ноль
+            "G1 Z-2.000 F300",              # Кадр 3: Заглубление фрезы на 2 мм
+            
+            # --- СЕГМЕНТ 1: Поворот под 15 градусов ---
+            "G1 X100.000 Y0.000 F1500",     # Кадр 4: Прямая линия по оси X
+            "G1 X196.590 Y25.880",          # Кадр 5: Плавный излом на 15° (длина 100мм)
+            
+            # --- СЕГМЕНТ 2: Поворот под 45 градусов ---
+            "G1 X267.300 Y96.590",          # Кадр 6: Переход на диагональ под 45°
+            
+            # --- СЕГМЕНТ 3: Поворот под 60 градусов ---
+            "G1 X267.300 Y200.000",         # Кадр 7: Излом на 60° (каретка идет строго по Y)
+            
+            # --- СЕГМЕНТ 4: Прямой угол 90 градусов ---
+            "G1 X100.000 Y200.000",         # Кадр 8: Поворот на 90° (возврат по оси X)
+            
+            # --- СЕГМЕНТ 5: Острый разворот 120 градусов (Шпилька) ---
+            "G1 X50.000 Y113.400",          # Кадр 9: Идем по диагонали назад-вниз
+            "G1 X0.000 Y200.000",           # Кадр 10: Жесткий излом на 120° (резко вверх-влево)
+            
+            # --- СЕГМЕНТ 6: Замыкание контура и выход ---
+            "G1 X0.000 Y100.000",           # Кадр 11: Опускаемся по Y
+            "G1 X50.000 Y50.000",           # Кадр 12: Небольшой зигзаг
+            "G1 X0.000 Y0.000",             # Кадр 13: Возврат в точку старта
+            
+            "G0 Z5.000 F2000",              # Кадр 14: Выход фрезы из материала
+            "G0 X0.000 Y0.000"              # Кадр 15: Отвод портала в ноль
         ]
         
-        self.lbl_file_info.setText(f"Программа: debug_square.nc ({len(self.machine_state.gcode_lines)} кадров)")
+        self.lbl_file_info.setText(f"Программа: lookahead_test_poly.nc ({len(self.machine_state.gcode_lines)} кадров)")
         self.btn_preload.setEnabled(True)
+        
+        # Сигнал для обновления Ленты G-кода на экране ноутбука
         self.gcode_loaded_notify.emit()
+
+
 
     def _preload_gcode_buffer(self):
         """
-        ИНТЕЛЛЕКТУАЛЬНЫЙ БИНАРНЫЙ КОМПИЛЯТОР ПОД ПРОТОКОЛ ESP32
-        Обеспечивает 100% заполнение всех 5 разделителей ';' за счет кэша модального состояния
+        Новая логика пакетной загрузки программы.
+        Вызывает модуль математического Look-Ahead планировщика ЧПУ.
         """
-        if not self.machine_state: return
+        if not self.machine_state or not self.machine_state.gcode_lines: 
+            return
+            
+        # Импортируем наш новый планировщик
+        from gcode.core_planner import CNCPlannerX
         
-        # 1. Сигнал старта сессии загрузки
+        # Инстанцируем планировщик. 
+        # Параметры accel и junction_deviation в будущем можно брать прямо из state.config!
+        planner = CNCPlannerX(accel=150.0, min_speed=2.0, junction_deviation=0.02)
+        
+        # 1. Открываем сессию бинарной загрузки в ESP32
         self.command_requested.emit("GCODE_UPLOAD_START")
         
-        # --- КЭШ МОДАЛЬНОГО СОСТОЯНИЯ ТРАЕКТОРИИ ---
-        # Если программа начинается не с нуля, берем текущее физическое положение станка из CNCState,
-        # чтобы первый кадр не вызвал резкого прыжка моторов
-        current_x = self.machine_state.x
-        current_y = self.machine_state.y
-        current_z = self.machine_state.z
-        current_f = 300.0 # Скорость по умолчанию, если не задана в первом кадре
-        current_type = 0  # 0=G0 (маршевый), 1=G1 (рабочий)
+        # 2. Передаем исходные строки G-кода в математический планировщик Look-Ahead.
+        # Получаем готовый массив строк B:... с расчитанными v_start и v_end и 7 разделителями!
+        binary_packets = planner.parse_and_plan(self.machine_state.gcode_lines)
         
-        for idx, line in enumerate(self.machine_state.gcode_lines):
-            clean = line.strip().upper()
-            if not clean: continue
-            
-            # Парсим тип интерполяции (модальный параметр)
-            if "G0" in clean: current_type = 0
-            elif "G1" in clean: current_type = 1
-            
-            # Ищем координаты регулярными выражениями
-            match_x = re.search(r"X([-\d.]+)", clean)
-            match_y = re.search(r"Y([-\d.]+)", clean)
-            match_z = re.search(r"Z([-\d.]+)", clean)
-            match_f = re.search(r"F(\d+)", clean)
-            
-            # --- ЛОГИКА АВТОЗАПОЛНЕНИЯ ИЗ КЭША GUI ---
-            # Если координата найдена в текущей строке — обновляем кэш.
-            # Если не найдена — подставляем её последнее известное значение, спасая станок от улета в 0.
-            if match_x: current_x = float(match_x.group(1))
-            if match_y: current_y = float(match_y.group(1))
-            if match_z: current_z = float(match_z.group(1))
-            if match_f: current_f = float(match_f.group(1))
-            
-            # Сборка монолитного пакета: B:cmdType;lineNum;X;Y;Z;F
-            # Теперь здесь всегда железно заполнены все 5 разделителей и все параметры!
-            packet = f"B:{current_type};{idx};{current_x:.3f};{current_y:.3f};{current_z:.3f};{current_f:.1f}"
-            
-            # Выталкиваем пакет в поток связи (connection_worker.py добавит \r\n и сделает .flush())
+        # 3. Выплескиваем скомпилированный поток пакетов в воркер связи
+        for packet in binary_packets:
             self.command_requested.emit(packet)
             
-        # 2. Сигнал закрытия сессии загрузки
+        # 4. Закрываем сессию загрузки программы
         self.command_requested.emit("GCODE_UPLOAD_END")
         
+        # Активируем кнопки цикла СТАРТ/ПАУЗА на ноутбуке
         for btn in [self.btn_start, self.btn_pause, self.btn_stop]:
             btn.setEnabled(True)

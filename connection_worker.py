@@ -14,7 +14,7 @@ except ImportError:
 class CNCConnectionWorker(QThread):
     # Сигналы для отправки данных обратно в главный GUI-поток
     connection_status = pyqtSignal(bool, str)       # (Успех/Завершено, Сообщение для лога)
-    telemetry_received = pyqtSignal(str, float, float, float, bool, bool) # Status, X, Y, Z, Comp, Map
+    telemetry_received = pyqtSignal(str, float, float, float, bool, int) # Status, X, Y, Z, Comp, line
     scan_point_received = pyqtSignal(float, float, str)  # X, Z_val, 'laser' или 'probe'
     log_received = pyqtSignal(str)                  # Сырой текст от станка в общую консоль
 
@@ -112,41 +112,35 @@ class CNCConnectionWorker(QThread):
     # ==========================================
     # ПАРСЕР ДАННЫХ ОТ СТАНКА (ОБЩИЙ ДЛЯ ДВУХ РЕЖИМОВ)
     # ==========================================
+    # ==========================================================
+    # ИСПРАВЛЕННЫЙ ЭТАЛОННЫЙ ПАРСЕР ПОД ФОРМАТ ESP_LARGE_CNC
+    # ==========================================================
     def _parse_incoming_line(self, line):
         if not line: return
         
-        # Анализируем строку вида: <Status:ALARM|Time=72072|Pos:X=0.00,Y=0.00,Z=0.00|Hom:0|Line=0>
+        # Диагностический вывод сырых данных (всегда видим, что прилетело в порт)
+        #self.log_received.emit(f"[DEBUG RAW INCOMING] >>>{line}<<<")
+        
+        # 1. Проверка пакета телеметрии
         if line.startswith("<Status:"):
             try:
-                # 1. Вытаскиваем статус (ALARM, IDLE, RUNNING и т.д.)
                 status = re.search(r"Status:([^|]+)", line).group(1)
-                
-                # 2. Вытаскиваем координаты X, Y, Z с учетом конструкции X=..., Y=..., Z=...
                 x = float(re.search(r"X=([-\d.]+)", line).group(1))
                 y = float(re.search(r"Y=([-\d.]+)", line).group(1))
                 z = float(re.search(r"Z=([-\d.]+)", line).group(1))
                 
-                # 3. Вытаскиваем статус хомления (Hom:0 или Hom:1)
-                is_homed = int(re.search(r"Hom:(\d+)", line).group(1)) == 1
+                is_homed_digit = int(re.search(r"Hom:(\d+)", line).group(1))
+                is_homed = (is_homed_digit == 1)
                 
-                # 4. Вытаскиваем текущую выполняемую строку (Line=0)
-                current_line = int(re.search(r"Line=(\d+)", line).group(1))
+                match_line = re.search(r"Line=(\d+)", line)
+                current_line = int(match_line.group(1)) if match_line else 0
                 
-                # Генерируем сигнал. Поскольку мы убрали флаги Comp и Map из строки ESP32,
-                # передаем вместо них статус хомления и номер кадра.
-                # Сигнал теперь шлет: (status, x, y, z, is_homed, current_line)
                 self.telemetry_received.emit(status, x, y, z, is_homed, current_line)
                 
-            except (AttributeError, ValueError) as e:
-                # Если пакет по дороге побился, выводим ошибку парсинга в лог
-                self.log_received.emit(f"Ошибка парсинга пакета: {e} | Строка: {line}")
-
-        elif line.startswith("CONFIG_DATA:"):
-            # Просто пробрасываем всю строку в общий лог, 
-            # а главный диспетчер main.py передаст её в модель состояния
-            self.log_received.emit(line)
-            
-        # Поток данных сканирования: SCAN:X_val;Z_val;TYPE
+            except (AttributeError, ValueError, IndexError) as e:
+                self.log_received.emit(f"Ошибка парсинга телеметрии: {e} | Строка: {line}")
+                
+        # 2. Проверка пакета измерительного сканера геометрии
         elif line.startswith("SCAN:"):
             try:
                 clean_data = line.replace("SCAN:", "")
@@ -157,9 +151,14 @@ class CNCConnectionWorker(QThread):
                 self.scan_point_received.emit(x, z_val, scan_type)
             except (IndexError, ValueError):
                 pass
+                
+        # 3. ВСЕ ОСТАЛЬНЫЕ СТРОКИ (Включая CONFIG_DATA: и ответы ok)
         else:
-            # Все ответы типа "ok" или сообщения от PlatformIO сыпем в общую консоль
-            self.log_received.emit(f"Станок: {line}")
+            # Просто выплескиваем строку в лог-сигнал. 
+            # Главный диспетчер в main.py перехватит её и распарсит!
+            self.log_received.emit(line)
+
+
 
     # ==========================================
     # ОТПРАВКА КОМАНД ИЗ GUI В СТАНК

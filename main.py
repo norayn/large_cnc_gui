@@ -54,17 +54,30 @@ class CNCApplication:
             self.conn_worker.send_command("GET_CONFIG")
 
     def handle_incoming_log(self, msg):
-        """Перехват текстовых сообщений от ESP32"""
+        """Перехват всех текстовых ответов, эхо-команд и логов от ESP32"""
+        # 1. Записываем строку в сессионный лог на диск ноутбука
         self.write_to_log_file("[ЧПУ -> GUI]", msg)
         
-        # Если пришла строка конфигурационных данных - скармливаем ее модели состояния
-        if msg.startswith("CONFIG_DATA:"):
-            self.state.parse_config_string(msg)
-            self.window.lbl_log_preview.setStyleSheet("font-size: 11px; color: #00ffff;")
-            self.window.lbl_log_preview.setText("ЛОГ: Конфигурационные параметры успешно считаны из памяти ЧПУ.")
-        else:
-            self.window.lbl_log_preview.setStyleSheet("font-size: 11px; color: #00ff00;")
-            self.window.lbl_log_preview.setText(f"ОТВЕТ СТАНКА: {msg}")
+        # 2. ИНТЕЛЛЕКТУАЛЬНЫЙ ПЕРЕХВАТ КОНФИГУРАЦИИ
+        # Если пришедшая строка — это наши параметры конфигурации, отдаем их в модель состояния
+        if "CONFIG_DATA:" in msg:
+            # На случай, если строка пришла с префиксом диагностики [DEBUG RAW INCOMING], 
+            # очищаем её, оставляя только чистое тело данных
+            clean_config = msg if msg.startswith("CONFIG_DATA:") else msg.split(">>>")[-1].split("<<<")[0]
+            
+            if clean_config.startswith("CONFIG_DATA:"):
+                # Скармливаем строку парсеру словаря в machine_state.py
+                self.state.parse_config_string(clean_config)
+                
+                # Подсвечиваем нижнюю полоску лога голубым цветом успеха
+                self.window.lbl_log_preview.setStyleSheet("font-size: 11px; color: #00ffff; font-weight: bold;")
+                self.window.lbl_log_preview.setText("ЛОГ: Конфигурация успешно импортирована в память GUI!")
+                return # Выходим из метода, чтобы не затирать надпись лога ниже
+                
+        # 3. Обработка всех остальных штатных ответов (ok, error и т.д.)
+        self.window.lbl_log_preview.setStyleSheet("font-size: 11px; color: #00ff00;")
+        self.window.lbl_log_preview.setText(f"ОТВЕТ СТАНКА: {msg}")
+
 
     def start_connection(self, mode="usb", ip="192.168.4.1", port=8888, com="COM4", baud=115200):
         if self.conn_worker and self.conn_worker.isRunning():
@@ -116,13 +129,17 @@ class CNCApplication:
             self.window.txt_mdi.clear()
 
     def handle_telemetry_packet(self, status, x, y, z, is_homed, current_line):
-        """Прослойка для логирования сырой телеметрии и пуша ее в CNCState"""
-        # Логируем пакет телеметрии в файл для истории отладки
-        raw_packet_str = f"<Status:{status}|Pos:X={x},Y={y},Z={z}|Hom:{int(is_homed)}|Line={current_line}>"
+        """Реактивный обработчик пакетов телеметрии от ESP32"""
+        # Гарантируем, что номер кадра — это строго целое число (int)
+        line_index = int(current_line)
+        
+        # Формируем красивую отладочную строчку для потоковой записи на диск cnc_session.log
+        # Теперь здесь гарантированно будет выводиться число (Line=0, Line=1, Line=5 и т.д.)
+        raw_packet_str = f"<Status:{status}|Pos:X={x:.2f},Y={y:.2f},Z={z:.2f}|Hom:{1 if is_homed else 0}|Line={line_index}>"
         self.write_to_log_file("[ЧПУ TELEM]", raw_packet_str)
         
-        # Обновляем состояние
-        self.state.update_telemetry(status, x, y, z, is_homed, current_line)
+        # Пушим данные в Единый Источник Истины (CNCMachineState)
+        self.state.update_telemetry(status, x, y, z, is_homed, line_index)
 
     def handle_gcode_loaded_ui(self):
         """Слот: переносит сгенерированные строки из памяти состояния на экран ноутбука"""
